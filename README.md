@@ -1,41 +1,54 @@
 # SharedHandoffBuffer
 
-A Windows-based inter-process communication (IPC) library and demonstration application using shared memory, mutexes, and events for synchronized communication between processes.
+A modern, Windows-based inter-process communication (IPC) library and demonstration application using shared memory, mutexes, and events for synchronized communication between processes. Built with modern C++11/14 features including RAII, move semantics, and template-based design.
 
 ## Overview
 
-SharedHandoffBuffer provides a robust mechanism for bidirectional communication between two processes (Source and Target) using Windows IPC primitives. The library ensures synchronized message passing with proper handshaking and liveness checking.
+SharedHandoffBuffer provides a robust, type-safe mechanism for bidirectional communication between two processes (Source and Target) using Windows IPC primitives. The library ensures synchronized message passing with proper handshaking, liveness checking, and automatic resource management through RAII principles.
 
 ## Features
 
-- **Shared Memory Communication**: Uses Windows file mapping for efficient data sharing
-- **Thread-Safe Operations**: Mutex-based synchronization for concurrent access
+- **Modern C++ Design**: RAII-based resource management with automatic cleanup
+- **Template-Based Architecture**: Generic `MappedBuffer<T>` for type-safe shared memory
+- **RAII Handle Management**: `HandleWrapper` class for automatic Windows handle cleanup
+- **Thread-Safe Operations**: `MutexGuard` RAII class for scoped mutex locking
+- **Large Buffer Support**: 4KB payload buffer (configurable via template)
 - **Event-Driven Signaling**: Windows events for process coordination
+- **Robust Error Handling**: Comprehensive error checking with debug support
 - **Liveness Checking**: Built-in mechanism to verify target process health
-- **Command-Response Pattern**: Structured communication with defined message types
+- **Command-Response Pattern**: Structured communication with type-safe enums
 - **Automatic Process Management**: Parent process can launch and monitor child processes
+- **Move Semantics**: Efficient resource transfer with move constructors/assignment
 
 ## Architecture
 
 ### Core Components
 
-- **HandoffMessage Structure**: Contains command type, response type, and payload data (256 bytes)
+- **HandoffMessage Structure**: Contains command type, response type, and large payload buffer (4KB default)
 - **SharedHandoffBuffer Class**: Main IPC wrapper providing high-level communication methods
-- **Command Types**: 
-  - `eData`: Send data payload
-  - `eLivenessCheck`: Verify target process is responsive
-- **Response Types**:
-  - `ePayload`: Response containing processed data
-  - `eAlive`: Confirmation of liveness check
+- **HandleWrapper Class**: RAII wrapper for Windows handles (mutexes, events) with automatic cleanup
+- **MutexGuard Class**: RAII scoped lock for thread-safe operations
+- **MappedBuffer Template**: Generic template class for type-safe shared memory management
+
+### Command Types
+- `GetIdentity`: Request identity/process information
+- `SetHandoffId`: Set a handoff identifier
+- `LivenessCheck`: Verify target process is responsive
+
+### Response Types
+- `None`: No response (default state)
+- `Identity`: Response containing identity information
+- `Acknowledged`: Confirmation of command receipt
+- `Alive`: Confirmation of liveness check
 
 ### IPC Objects Used
 
-- **File Mapping**: Shared memory buffer for message exchange
-- **Mutex**: Exclusive access to shared buffer
-- **Events**: Signaling between source and target processes
+- **File Mapping**: Template-based shared memory buffer (`MappedBuffer<HandoffMessage>`)
+- **Mutex**: Exclusive access to shared buffer with RAII locking (`MutexGuard`)
+- **Events**: Signaling between source and target processes via `HandleWrapper`
   - Source Event: Target → Source notifications
   - Target Event: Source → Target notifications  
-  - Target Ready Event: Target initialization signal
+  - Target Ready Event: Target initialization signal with timeout support
 
 ## Building
 
@@ -43,7 +56,7 @@ SharedHandoffBuffer provides a robust mechanism for bidirectional communication 
 
 - Visual Studio 2019 or later
 - Windows SDK
-- C++11 or later support
+- C++11 or later support (C++14 recommended for move semantics)
 
 ### Build Instructions
 
@@ -110,36 +123,67 @@ Connects to existing IPC objects and responds to source commands.
 
 ### SharedHandoffBuffer Constructor
 ```cpp
-SharedHandoffBuffer(bool b_create_ipc, const std::string& sz_prefix)
+SharedHandoffBuffer(bool isSource, const std::string& sz_prefix)
 ```
-- `b_create_ipc`: true for source (creates IPC objects), false for target (opens existing objects)
+- `isSource`: true for source (creates IPC objects), false for target (opens existing objects)
 - `sz_prefix`: unique identifier for IPC object names
 
 ### Key Methods
 
 #### Source Operations
-- `WaitForTargetReady()`: Wait for target process initialization
-- `SendFromSource(eHandoffCommand e_cmd, const std::string& sz_payload)`: Send command to target
-- `WaitForTarget(eHandoffResponse& e_out_resp, std::string& sz_out_payload, DWORD dw_timeout)`: Wait for target response
+- `WaitForTargetReady()`: Wait for target process initialization (with timeout)
+- `SendFromSource(HandoffCommand cmd, const std::string& payload)`: Send command to target
+- `WaitForTarget(HandoffResponse& resp, std::string& payload, DWORD timeout)`: Wait for target response
 
 #### Target Operations
 - `SignalTargetReady()`: Signal initialization complete
-- `WaitForSource(std::string& sz_out_payload)`: Wait for source command
-- `SendFromTarget(eHandoffResponse e_resp, const std::string& sz_payload)`: Send response to source
+- `WaitForSource(std::string& payload)`: Wait for source command
+- `SendFromTarget(HandoffResponse resp, const std::string& payload)`: Send response to source
 
 ## Error Handling
 
-The library throws `std::runtime_error` exceptions for:
+The library uses modern C++ exception safety and RAII principles:
+- Throws `std::runtime_error` exceptions for IPC failures
+- Calls `std::abort()` and `DebugBreak()` for critical errors in debug builds
+- Automatic resource cleanup through destructors
+- Move semantics prevent resource duplication
+- Template-based design ensures type safety
+
+Common error scenarios:
 - Failed IPC object creation/opening
-- Memory mapping failures
+- Memory mapping failures  
 - Handle access errors
+- Timeout conditions
 
 ## Limitations
 
 - Windows-specific implementation (uses Win32 API)
-- Fixed payload size (256 bytes)
+- Large payload size (4KB default, configurable via template)
 - Designed for two-process communication
 - Requires unique prefix for each process pair
+- Debug builds include additional error checking with abort/breakpoint calls
+
+## Modern C++ Features
+
+### RAII Resource Management
+- **HandleWrapper**: Automatic Windows handle cleanup with move semantics
+- **MutexGuard**: Scoped mutex locking with exception safety
+- **MappedBuffer<T>**: Template-based shared memory with automatic unmapping
+
+### Template-Based Design
+- Generic `MappedBuffer<T>` allows different message types
+- Compile-time buffer size configuration
+- Type-safe enum classes for commands and responses
+
+### Exception Safety
+- Strong exception safety guarantees
+- Automatic resource cleanup on stack unwinding
+- No resource leaks even on early termination
+
+### Move Semantics
+- Efficient resource transfer between objects
+- Deleted copy constructors to prevent accidental duplication
+- Move constructors and assignment operators for performance
 
 ## Contributing
 
@@ -156,6 +200,10 @@ This project is available under the MIT License. See LICENSE file for details.
 ## Technical Notes
 
 - Uses named objects with "Local\\" prefix for session isolation
-- Automatic cleanup of Windows handles in destructor
-- Thread-safe operations through mutex synchronization
+- RAII-based automatic cleanup of Windows handles in destructors
+- Thread-safe operations through scoped mutex locking (`MutexGuard`)
+- Template-based design for type safety and flexibility
+- Move semantics support for efficient resource management
 - Supports timeout-based operations for robust error handling
+- Debug builds include comprehensive error checking and diagnostics
+- Modern C++11/14 features throughout the codebase

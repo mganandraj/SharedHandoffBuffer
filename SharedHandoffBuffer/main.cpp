@@ -3,6 +3,7 @@
 #include <string>
 #include <thread>
 #include <chrono>
+#include <sstream>
 
 // Helper to generate a unique buffer prefix (for demo)
 std::string GenerateUniquePrefix() {
@@ -10,20 +11,34 @@ std::string GenerateUniquePrefix() {
 }
 
 void RunSource(const std::string& sz_prefix) {
-    SharedHandoffBuffer oBuffer(/*b_create_ipc=*/true, sz_prefix);
+
+    DWORD pid = GetCurrentProcessId();
+    std::stringstream pidStr;
+    pidStr << "Source" << std::to_string(pid);
+    // ::MessageBoxA(NULL, pidStr.str().c_str(), NULL, MB_OK);
+
+    std::cout << "[Source] 1..." << std::endl;
+    SharedHandoffBuffer buffer(/*b_create_ipc=*/true, sz_prefix);
     std::cout << "[Source] Waiting for target to be ready..." << std::endl;
-    oBuffer.WaitForTargetReady();
+    
+    if (!buffer.WaitForTargetReady())
+    {
+        std::cout << "[Source] Target not ready. Aborting..." << std::endl;
+        std::abort();
+    }
+
+
     std::cout << "[Source] Target ready. Starting commands..." << std::endl;
 
     // Send a few data commands
     for (int i = 0; i < 3; ++i) {
         std::string sz_payload = "Message #" + std::to_string(i);
-        oBuffer.SendFromSource(eHandoffCommand::eData, sz_payload);
+        buffer.SendFromSource(SharedHandoffBuffer::HandoffCommand::GetIdentity, sz_payload);
 
-        eHandoffResponse e_resp;
+        SharedHandoffBuffer::HandoffResponse e_resp;
         std::string sz_response;
-        if (oBuffer.WaitForTarget(e_resp, sz_response, 3000)) {
-            if (e_resp == eHandoffResponse::ePayload) {
+        if (buffer.WaitForTarget(e_resp, sz_response, 3000)) {
+            if (e_resp == SharedHandoffBuffer::HandoffResponse::Identity) {
                 std::cout << "[Source] Target responded: " << sz_response << std::endl;
             }
             else {
@@ -38,11 +53,11 @@ void RunSource(const std::string& sz_prefix) {
     // Idle loop with liveness polling
     for (int i = 0; i < 3; ++i) {
         std::cout << "[Source] Polling target for liveness..." << std::endl;
-        oBuffer.SendFromSource(eHandoffCommand::eLivenessCheck, "");
-        eHandoffResponse e_resp;
+        buffer.SendFromSource(SharedHandoffBuffer::HandoffCommand::LivenessCheck, "");
+        SharedHandoffBuffer::HandoffResponse e_resp;
         std::string sz_response;
-        if (oBuffer.WaitForTarget(e_resp, sz_response, 2000)) {
-            if (e_resp == eHandoffResponse::eAlive) {
+        if (buffer.WaitForTarget(e_resp, sz_response, 2000)) {
+            if (e_resp == SharedHandoffBuffer::HandoffResponse::Alive) {
                 std::cout << "[Source] Target is alive." << std::endl;
             }
             else {
@@ -58,24 +73,37 @@ void RunSource(const std::string& sz_prefix) {
 }
 
 void RunTarget(const std::string& sz_prefix) {
-    SharedHandoffBuffer oBuffer(/*b_create_ipc=*/false, sz_prefix);
-    oBuffer.SignalTargetReady();
+
+    DWORD pid = GetCurrentProcessId();
+    std::stringstream pidStr;
+    pidStr << "Target" << std::to_string(pid);
+    // ::MessageBoxA(NULL, pidStr.str().c_str(), NULL, MB_OK);
+
+    std::cout << "[Target] 1..." << std::endl;
+    SharedHandoffBuffer buffer(/*b_create_ipc=*/false, sz_prefix);
+    std::cout << "[Target] Starting..." << std::endl;
+    
+    buffer.SignalTargetReady();
     std::cout << "[Target] Ready and waiting for commands..." << std::endl;
 
     while (true) {
         std::string sz_payload;
-        eHandoffCommand e_cmd = oBuffer.WaitForSource(sz_payload);
-        if (e_cmd == eHandoffCommand::eData) {
+        SharedHandoffBuffer::HandoffCommand e_cmd = buffer.WaitForSource(sz_payload);
+        if (e_cmd == SharedHandoffBuffer::HandoffCommand::GetIdentity) {
             std::string sz_reply = "Processed: " + sz_payload;
-            oBuffer.SendFromTarget(eHandoffResponse::ePayload, sz_reply);
+            buffer.SendFromTarget(SharedHandoffBuffer::HandoffResponse::Identity, sz_reply);
             std::cout << "[Target] Responded to Data command: " << sz_reply << std::endl;
         }
-        else if (e_cmd == eHandoffCommand::eLivenessCheck) {
-            oBuffer.SendFromTarget(eHandoffResponse::eAlive, "");
+        else if (e_cmd == SharedHandoffBuffer::HandoffCommand::LivenessCheck) {
+            buffer.SendFromTarget(SharedHandoffBuffer::HandoffResponse::Alive, "");
+            std::cout << "[Target] Responded to Liveness Check." << std::endl;
+        }
+        else if (e_cmd == SharedHandoffBuffer::HandoffCommand::SetHandoffId) {
+            buffer.SendFromTarget(SharedHandoffBuffer::HandoffResponse::Acknowledged, "");
             std::cout << "[Target] Responded to Liveness Check." << std::endl;
         }
         else {
-            oBuffer.SendFromTarget(eHandoffResponse::eNone, "");
+            buffer.SendFromTarget(SharedHandoffBuffer::HandoffResponse::None, "");
             std::cout << "[Target] Unknown command received." << std::endl;
         }
     }
@@ -101,6 +129,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "[Parent] Failed to launch Source process\n";
             return 1;
         }
+
+        std::this_thread::sleep_for(std::chrono::seconds(3));
+
         if (!CreateProcessA(NULL, (LPSTR)sz_tgt_cmd.c_str(), NULL, NULL, TRUE, CREATE_NEW_CONSOLE, NULL, NULL, &si, &pi_tgt)) {
             std::cerr << "[Parent] Failed to launch Target process\n";
             CloseHandle(pi_src.hProcess);
