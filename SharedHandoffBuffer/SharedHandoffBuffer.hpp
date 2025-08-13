@@ -1,11 +1,12 @@
 #pragma once
+
 #include <windows.h>
-#include "SharedHandoffBuffer.hpp"
 #include <iostream>
 #include <chrono>
 #include <string>
 #include <stdexcept>
 
+// MutexGuard class to manage mutex locking and unlocking
 class MutexGuard {
 public:
     explicit MutexGuard(HANDLE hMutex) noexcept
@@ -14,18 +15,18 @@ public:
         if (!m_hMutex)
         {
             std::abort();
-            DebugBreak();
+
         }
 
         DWORD dwResult = WaitForSingleObject(m_hMutex, INFINITE);
         if (dwResult != WAIT_OBJECT_0)
         {
             std::abort();
-            DebugBreak();
+
         }
     }
 
-	// Non-copyable and non-movable
+    // Non-copyable and non-movable
     MutexGuard(const MutexGuard&) = delete;
     MutexGuard& operator=(const MutexGuard&) = delete;
     MutexGuard(MutexGuard&& other) noexcept = delete;
@@ -33,7 +34,7 @@ public:
 
     ~MutexGuard() noexcept {
         if (!m_hMutex)
-            std::abort(); 
+            std::abort();
         ReleaseMutex(m_hMutex);
     }
 
@@ -65,17 +66,17 @@ public:
             else {
                 handle_ = OpenEventA(EVENT_MODIFY_STATE | SYNCHRONIZE, FALSE, name.c_str());
             }
-		}
+        }
 
-        if(!valid()) {
+        if (!valid()) {
             std::abort();
-            DebugBreak();
-		}
+
+        }
     }
 
-	HandleWrapper(const HandleWrapper&) = delete;
+    HandleWrapper(const HandleWrapper&) = delete;
     HandleWrapper& operator=(const HandleWrapper&) = delete;
-    
+
     HandleWrapper(HandleWrapper&& other) noexcept : handle_(other.handle_) {
         other.handle_ = nullptr;
     }
@@ -115,24 +116,24 @@ class MappedBuffer {
 public:
     MappedBuffer() noexcept
         : m_hMap(nullptr), m_ptr(nullptr)
-    {}
+    {
+    }
 
     MappedBuffer(const std::string& mapName, bool creator) noexcept
-        : m_hMap(nullptr), m_ptr(nullptr)
+        : m_mapName(mapName), m_hMap(nullptr), m_ptr(nullptr)
     {
         std::cout << "[SharedHandoffBuffer::MappedBuffer()] 1..." << mapName << "size: " << sizeof(T) << std::endl;
 
         if (creator) {
-            
+
             std::cout << "[SharedHandoffBuffer::MappedBuffer()] 2 creator..." << std::endl;
 
             m_hMap = CreateFileMappingA(INVALID_HANDLE_VALUE, NULL, PAGE_READWRITE, 0, sizeof(T), mapName.c_str());
             if (!m_hMap)
             {
                 std::cout << "[SharedHandoffBuffer::MappedBuffer()] 2 creator..." << GetLastError() << std::endl;
-
                 std::abort();
-                DebugBreak();
+
             }
 
             std::cout << "[SharedHandoffBuffer::MappedBuffer()] 2 creator created..." << std::endl;
@@ -148,9 +149,9 @@ public:
             {
                 std::cout << "[SharedHandoffBuffer::MappedBuffer()] 2 non creator..." << GetLastError() << std::endl;
                 std::abort();
-                DebugBreak();
+
             }
-                
+
 
             std::cout << "[SharedHandoffBuffer::MappedBuffer()] 2 non creator opened..." << std::endl;
         }
@@ -160,30 +161,32 @@ public:
         if (!m_ptr)
             std::abort();
 
-        if(creator) {
+        if (creator) {
             ZeroMemory(m_ptr, sizeof(T));
-		}
+        }
     }
 
-    ~MappedBuffer() noexcept  {
+    ~MappedBuffer() noexcept {
 
         std::cout << "[SharedHandoffBuffer::~MappedBuffer]" << std::endl;
 
         if (m_ptr)
             UnmapViewOfFile(m_ptr);
-		if (m_hMap)
+        if (m_hMap)
             CloseHandle(m_hMap);
 
         m_ptr = nullptr;
-		m_hMap = nullptr;
+        m_hMap = nullptr;
     }
-    
+
     MappedBuffer(const MappedBuffer&) = delete;
     MappedBuffer& operator=(const MappedBuffer&) = delete;
 
-    MappedBuffer(MappedBuffer&& other) noexcept : m_ptr(other.m_ptr) {
+    MappedBuffer(MappedBuffer&& other) noexcept : m_mapName(std::move(other.m_mapName)), m_hMap(other.m_hMap), m_ptr(other.m_ptr)
+    {
         other.m_hMap = nullptr;
         other.m_ptr = nullptr;
+        other.m_mapName.clear();
     }
     MappedBuffer& operator=(MappedBuffer&& other) noexcept {
         if (this != &other) {
@@ -193,18 +196,28 @@ public:
 
             if (m_hMap)
                 CloseHandle(m_hMap);
-			m_hMap = other.m_hMap;
-			other.m_hMap = nullptr;
+            m_hMap = other.m_hMap;
+            other.m_hMap = nullptr;
+
+            m_mapName = std::move(other.m_mapName);
+            other.m_mapName.clear();
         }
         return *this;
     }
+
     T* get() const noexcept { return m_ptr; }
     T& operator*() const noexcept { return *m_ptr; }
     T* operator->() const noexcept { return m_ptr; }
 
+    std::string GetMapName() const noexcept {
+        return m_mapName;
+    }
+
 private:
-	HANDLE m_hMap;
+    std::string m_mapName;
+    HANDLE m_hMap;
     T* m_ptr;
+
 };
 
 class SharedHandoffBuffer {
@@ -219,19 +232,26 @@ public:
 
     enum class HandoffResponse : uint8_t {
         None = 0,
-        Identity, 
+        Identity,
         Acknowledged,
         Alive,
     };
 
     struct HandoffMessage {
         HandoffCommand cmd;
-		HandoffResponse resp;
+        HandoffResponse resp;
         uint16_t payload_size;
         char payload[BUFFER_SIZE - 4];
     };
 
+    SharedHandoffBuffer() {}
+
     SharedHandoffBuffer(bool isSource, const std::string& sz_prefix) noexcept
+    {
+        Initialize(isSource, sz_prefix);
+    }
+
+    void Initialize(bool isSource, const std::string& sz_prefix) noexcept
     {
         std::string bufferName = "Local\\" + sz_prefix + "_Buffer";
         std::string mutexName = "Local\\" + sz_prefix + "_Mutex";
@@ -242,7 +262,7 @@ public:
         std::cout << "[SharedHandoffBuffer] 1..." << std::endl;
 
         m_pMsg = MappedBuffer<HandoffMessage>(bufferName, isSource /* creator */);
-        
+
         std::cout << "[SharedHandoffBuffer] 2..." << std::endl;
         m_hMutex = HandleWrapper(mutexName, isSource, true);
         std::cout << "[SharedHandoffBuffer] 3..." << std::endl;
@@ -252,18 +272,46 @@ public:
         std::cout << "[SharedHandoffBuffer] 5..." << std::endl;
         m_hTargetReadyEvent = HandleWrapper(tgtReadyEventName, isSource, false);
 
-        if (!m_hMutex || !m_hSrcEvent || !m_hTgtEvent)
+        if (!IsInitialized())
             std::abort();
+    }
+
+    bool IsInitialized() const noexcept {
+        return m_pMsg.get() != nullptr && m_hMutex.valid() && m_hSrcEvent.valid() && m_hTgtEvent.valid() && m_hTargetReadyEvent.valid();
     }
 
     SharedHandoffBuffer(const SharedHandoffBuffer&) = delete;
     SharedHandoffBuffer& operator=(const SharedHandoffBuffer&) = delete;
 
-    SharedHandoffBuffer(SharedHandoffBuffer&&) = delete;
-    SharedHandoffBuffer& operator=(SharedHandoffBuffer&&) = delete;
+    SharedHandoffBuffer(SharedHandoffBuffer&& other) noexcept
+        : m_pMsg(std::move(other.m_pMsg)),
+        m_hMutex(std::move(other.m_hMutex)),
+        m_hSrcEvent(std::move(other.m_hSrcEvent)),
+        m_hTgtEvent(std::move(other.m_hTgtEvent)),
+        m_hTargetReadyEvent(std::move(other.m_hTargetReadyEvent))
+    {
+    }
+
+    SharedHandoffBuffer& operator=(SharedHandoffBuffer&& other) noexcept {
+        if (this != &other) {
+            m_pMsg = std::move(other.m_pMsg);
+            m_hMutex = std::move(other.m_hMutex);
+            m_hSrcEvent = std::move(other.m_hSrcEvent);
+            m_hTgtEvent = std::move(other.m_hTgtEvent);
+            m_hTargetReadyEvent = std::move(other.m_hTargetReadyEvent);
+        }
+        return *this;
+    }
+
+    std::string GetBufferName() const noexcept {
+        // return m_pMsg.GetMapName();
+        std::string mapName = m_pMsg.GetMapName();
+        std::string mapSuffix = "_Buffer";
+        return mapName.substr(0, mapName.size() - mapSuffix.size());
+    }
 
     bool WaitForTargetReady() noexcept {
-		DWORD timeout_ms = 3000000; // 30 seconds
+        DWORD timeout_ms = 3000000; // 30 seconds
         DWORD poll_interval_ms = 100;
         auto start = std::chrono::steady_clock::now();
         DWORD elapsed = 0;
@@ -287,7 +335,7 @@ public:
         };
 
         std::cout << "[WaitForTargetReady] expired" << std::endl;
-        return false;       
+        return false;
     }
 
     void SignalTargetReady() noexcept {
@@ -310,11 +358,11 @@ public:
     // Target waits and receives command from source
     HandoffCommand WaitForSource(std::string& sz_out_payload) noexcept {
         WaitForSingleObject(m_hTgtEvent, INFINITE);
-        
+
         MutexGuard lock(m_hMutex);
         HandoffCommand cmd = m_pMsg->cmd;
         sz_out_payload = m_pMsg->payload;
-        return cmd;        
+        return cmd;
     }
 
     // Target sends response (Payload or Alive), overwrites payload
@@ -325,7 +373,7 @@ public:
             strncpy_s(m_pMsg->payload, payload.c_str(), sizeof(m_pMsg->payload) - 1);
             m_pMsg->payload[sizeof(m_pMsg->payload) - 1] = 0;
         }
-        
+
         SetEvent(m_hSrcEvent);
     }
 
@@ -347,5 +395,5 @@ private:
     HandleWrapper m_hMutex;
     HandleWrapper m_hSrcEvent, m_hTgtEvent;
     HandleWrapper m_hTargetReadyEvent;
-    
+
 };

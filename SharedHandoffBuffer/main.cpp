@@ -18,15 +18,16 @@ void RunSource(const std::string& sz_prefix) {
     // ::MessageBoxA(NULL, pidStr.str().c_str(), NULL, MB_OK);
 
     std::cout << "[Source] 1..." << std::endl;
-    SharedHandoffBuffer buffer(/*b_create_ipc=*/true, sz_prefix);
+    SharedHandoffBuffer buffer1(/*b_create_ipc=*/true, sz_prefix);
     std::cout << "[Source] Waiting for target to be ready..." << std::endl;
     
-    if (!buffer.WaitForTargetReady())
+    if (!buffer1.WaitForTargetReady())
     {
         std::cout << "[Source] Target not ready. Aborting..." << std::endl;
         std::abort();
     }
 
+    auto buffer = std::move(buffer1);
 
     std::cout << "[Source] Target ready. Starting commands..." << std::endl;
 
